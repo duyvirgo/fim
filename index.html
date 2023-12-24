@@ -80,52 +80,101 @@ function Clear-And-Write-Header {
     Write-Host "=================== ADD DOMAIN TO 365 : PRO$serverNumber =====================" -ForegroundColor Yellow
 }
 
-function Enable-InternalRelay {
-    Write-Host "Dang load danh sach..."
-    # Lấy danh sách các tên miền không phải là Authoritative
-    $nonAuthoritativeDomains = Get-AcceptedDomain | Where-Object { $_.DomainType -eq 'Authoritative' }
-    # Hiển thị danh sách tên miền trong GridView và cho phép chọn nhiều tên miền
-    $selectedDomains = $nonAuthoritativeDomains | Out-GridView -Title "Chon domain" -OutputMode Multiple
-    
+# Lay thong tin id tenant tu api
+function Get-TenantIdFromDomain {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$domain
+    )
 
-    if ($selectedDomains -eq $null) {
-        Write-Host "Ban da huy chon ten mien." -ForegroundColor Yellow
-        return
+    $metadataUrl = "https://login.windows.net/$domain/.well-known/openid-configuration"
+    try {
+        $metadata = Invoke-RestMethod -Uri $metadataUrl
+        $tenantId = $metadata.issuer -replace "https://sts.windows.net/", "" -replace "/$"
+        return $tenantId
     }
-
-    # Hiển thị danh sách các tên miền đã chọn
-    Write-Host "Danh sach ten mien da chon:"
-    $selectedDomains | ForEach-Object { Write-Host $_.Name }
-
-    # Xác nhận từ người dùng trước khi thực hiện hành động
-    $confirmation = Read-Host "Ban co muon bat Internal Relay cho cac ten mien ban chon khong? (Y/N)"
-    $reasonTicket = Read-Host "Nhap li do"
-    if ($confirmation -ne 'Y') {
-        Write-Host "Ban da huy bo thao tac." -ForegroundColor Yellow
-        return
-    }
-
-    foreach ($selectedDomain in $selectedDomains) {
-        $domainName = $selectedDomain.Name
-
-        Write-Host "`nDang bat Internal Relay cho domain $domainName..." -ForegroundColor Yellow
-
-        # Bật Internal Relay cho tên miền được chọn
-        Set-AcceptedDomain -Identity $domainName -DomainType InternalRelay
-
-        # Lưu thông tin vào tệp CSV
-        $logData = [PSCustomObject]@{
-            Domain = $domainName
-            Date = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-            Server = $newEmail
-            Reason = $reasonTicket
-        }
-        $logData | Export-Csv -Path "C:\Users\PC\Documents\GitHub\sap_tools\scripts\scripts\log\enable_internalRelay.csv" -Append -NoTypeInformation
-
-        Write-Host "Internal Relay da duoc bat cho domain $domainName." -ForegroundColor Green
+    catch {
+        Write-Error "Loi conenct domain $domain . Error: $_"
     }
 }
 
+# Lay thong tin tenant tu file csv online
+function Get-DomainFromTenantId {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$tenantId
+    )
+
+    $apiUrl = "https://raw.githubusercontent.com/duyvirgo/fim/main/tenant_info.csv"
+
+    try {
+        # Tải dữ liệu từ API
+        $apiData = Invoke-RestMethod -Uri $apiUrl
+
+        # Chuyển đổi dữ liệu CSV thành đối tượng PowerShell
+        $csvData = ConvertFrom-Csv $apiData
+
+        # Tìm kiếm domain tương ứng với tenantId
+        $domain = $csvData | Where-Object { $_.ID -eq $tenantId } | Select-Object -ExpandProperty Tenant
+
+        if ($domain) {
+            return $domain
+        }
+        else {
+            return "Domain khong thuoc SAP"
+        }
+    }
+    catch {
+        Write-Host "An error occurred: $($_.Exception.Message)"
+        throw $_.Exception.Message
+    }
+}
+
+# Ham Continue
+function Confirm-Continue {
+    $userInput = Read-Host "Ban co muon tiep tuc ? (Y/N)"
+    if ($userInput -eq 'Y') {
+        Clear-Host
+        return $true
+    }
+    elseif ($userInput -eq 'N') {
+        return $false
+    }
+    else {
+        Write-Host "Input khong hop le. Nhap lai Y hoac N."
+        return Confirm-Continue
+    }
+}
+
+# Ham check Tenant ID
+function check-TenantID {
+    do {
+        try {
+            Clear-Host
+            Write-Host "================ CHECK TENANT ID ================`n" -ForegroundColor Yellow
+            $domainInput = Read-Host -Prompt 'Nhap Domain/Tenant'
+            $domainInput = $domainInput.Replace(' ', '')
+            
+            if ($domainInput -notmatch '^[a-zA-Z0-9.-]+$') {
+                throw "Error: Domain chua ki tu khong hop le"
+            }
+
+            $tenantId = Get-TenantIdFromDomain -domain $domainInput -ErrorAction Stop
+            $domainResult = Get-DomainFromTenantId -tenantId $tenantId
+            Write-Host "`nDomain : $domainInput" -ForegroundColor Yellow
+            Write-Host "Tenant : $domainResult" -ForegroundColor Yellow
+            Write-Host "IDTenant : $tenantId`n" -ForegroundColor Yellow
+        }
+        catch {
+            if ($_.Exception.Message -like '*not found*') {
+                Write-Host "Error: Doamin chua connect 365 !" -ForegroundColor Red
+            }
+            else {
+                Write-Host $_.Exception.Message -ForegroundColor Red
+            }
+        }
+    } while (Confirm-Continue)
+}
 
 
 # Them domain vao 365
@@ -205,146 +254,50 @@ function add-New-Domain {
     Write-Host "ENABLE INTERNAL RELAY !"
     Enable-InternalRelay
 }
+# Bat internalrelay tu domain
+function Enable-InternalRelay {
+    Write-Host "Dang load danh sach..."
+    # Lấy danh sách các tên miền không phải là Authoritative
+    $nonAuthoritativeDomains = Get-AcceptedDomain | Where-Object { $_.DomainType -eq 'Authoritative' }
 
-
-function Get-TenantIdFromDomain {
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$domain
-    )
-
-    $metadataUrl = "https://login.windows.net/$domain/.well-known/openid-configuration"
-    try {
-        $metadata = Invoke-RestMethod -Uri $metadataUrl
-        $tenantId = $metadata.issuer -replace "https://sts.windows.net/", "" -replace "/$"
-        return $tenantId
+    # Hiển thị danh sách tên miền trong GridView và cho phép chọn nhiều tên miền
+    $selectedDomains = $nonAuthoritativeDomains | Out-GridView -Title "Chon domain" -OutputMode Multiple
+    Write-Host "Dang load danh sach..."
+    if ($selectedDomains -eq $null) {
+        Write-Host "Ban da huy chon ten mien." -ForegroundColor Yellow
+        return
     }
-    catch {
-        Write-Error "Loi conenct domain $domain . Error: $_"
-    }
-}
 
-function Get-DomainFromTenantId {
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$tenantId,
-        [Parameter(Mandatory = $true)]
-        [string]$csvFilePath
-    )
+    # Hiển thị danh sách các tên miền đã chọn
+    Write-Host "Danh sach ten mien da chon:`n"
+    $selectedDomains | ForEach-Object { Write-Host $_.Name }
 
-    try {
-        $csvData = Import-Csv -Path $csvFilePath
-        $domain = $csvData | Where-Object { $_.ID -eq $tenantId } | Select-Object -ExpandProperty Tenant
+    # Xác nhận từ người dùng trước khi thực hiện hành động
+    $confirmation = Read-Host "Ban co muon bat Internal Relay cho cac ten mien ban chon khong? (Y/N)"
+    $reasonTicket = Read-Host "Nhap li do"
+    if ($confirmation -ne 'Y') {
+        Write-Host "Ban da huy bo thao tac." -ForegroundColor Yellow
+        return
+    }
 
-        if ($domain) {
-            return $domain
-        }
-        else {
-            return "Domain khong thuoc SAP"
-        }
-    }
-    catch {
-        Write-Host "An error occurred: $($_.Exception.Message)"
-        throw $_.Exception.Message
-    }
-}
+    foreach ($selectedDomain in $selectedDomains) {
+        $domainName = $selectedDomain.Name
 
-function check-TenantID {
-    $csvFilePath = './scripts/data/data_tenant.csv' 
-    do {
-        try {
-            Clear-Host
-            Write-Host "================ CHECK TENANT ID ================`n" -ForegroundColor Yellow
-            $domainInput = Read-Host -Prompt 'Nhap Domain/Tenant'
-            $domainInput = $domainInput.Replace(' ', '')
-            if ($domainInput -notmatch '^[a-zA-Z0-9.-]+$') {
-                throw "Error: Domain chua ki tu khong hop le"
-            }
-            $tenantId = Get-TenantIdFromDomain -domain $domainInput -ErrorAction Stop
-            $domainResult = Get-DomainFromTenantId -tenantId $tenantId -csvFilePath $csvFilePath
-            Write-Host "`nDomain :$domainInput" -ForegroundColor Yellow
-            Write-Host "Tenant : $domainResult" -ForegroundColor Yellow
-            Write-Host "IDTenant : $tenantId`n" -ForegroundColor Yellow
-        }
-        catch {
-            if ($_.Exception.Message -like '*not found*') {
-                Write-Host "Error: Domain chua connect 365 !" -ForegroundColor Red
-            }
-            else {
-                Write-Host $_.Exception.Message -ForegroundColor Red
-            }
-        }
-    } while (Confirm-Continue)
-      
-}
+        Write-Host "`nDang bat Internal Relay cho domain $domainName..." -ForegroundColor Yellow
 
-function Confirm-Continue {
-    $userInput = Read-Host "Ban co muon tiep tuc ? (Y/N)"
-    if ($userInput -eq 'Y') {
-        Clear-Host
-        return $true
-    }
-    elseif ($userInput -eq 'N') {
-        return $false
-    }
-    else {
-        Write-Host "Input khong hop le. Nhap lai Y hoac N."
-        return Confirm-Continue
-    }
-}
+        # Bật Internal Relay cho tên miền được chọn
+        Set-AcceptedDomain -Identity $domainName -DomainType InternalRelay
 
-# Xoa domain khoi 365
-function remove-Domain {
-    Clear-Host
-    do {
-        Write-Host "=================== REMOVE DOMAIN FROM 365 =====================" -ForegroundColor Yellow
-    
-        $domainName = Read-Host "`nNhap domain can xoa "
-    
-        # Lấy thông tin tên miền và hiển thị kết quả
-        try {
-            $domainInfo = Get-MsolDomain -DomainName $domainName -ErrorAction Stop | Select-Object Name, Status
-            Write-Host "`nThong tin ve ten mien $domainName" -ForegroundColor Cyan
-            $domainInfo
-            $domainExists = $true
+        # Lưu thông tin vào tệp CSV
+        $logData = [PSCustomObject]@{
+            Domain = $domainName
+            Date   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            Server = $newEmail
+            Reason = $reasonTicket
         }
-        catch {
-            Clear-Host
-            Write-Host "`nDomain $domainName khong ton tai trong Office 365." -ForegroundColor Yellow
-            $continue = Read-Host "`nBan co muon tiep tuc? (Y/N)"
-            if ($continue -eq 'Y') {
-                $domainExists = $false
-            }
-            else {
-                return
-            }
-        }
-    } while (!$domainExists)
-    
-    $confirmation = Read-Host "`nBan co chac chan muon xoa ten mien nay khoi 365 khong ? (Y/N)"
-    $reasonTicket = Read-Host -Prompt 'Nhap li do'
-    if ($confirmation -eq 'Y') {
-        Write-Host "Lenh se duoc thuc thi trong vong 5 giay" -ForegroundColor Red
-        Start-Sleep -Seconds 5
-    
-        # Xóa tên miền
-        try {
-            Remove-MsolDomain -DomainName $domainName -Force -ErrorAction Stop
-            Write-Host "`nTen mien $domainName da duoc xoa." -ForegroundColor Yellow
-            $logData = [PSCustomObject]@{
-                Domain = $domainName
-                Date   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                Server = $newEmail
-                Reason = $reasonTicket
-            }
-            $logData | Export-Csv -Path "C:\Users\PC\Documents\GitHub\sap_tools\scripts\scripts\log\remove_Domain.csv" -Append -NoTypeInformation
-        }
-        catch {
-            Write-Host "`nTen mien $domainName chua duoc xoa. Vui long kiem tra Name,Alias dang su dung ten" -ForegroundColor Red
-        }
-    }
-    else {
-        Write-Host "Lenh xoa ten mien da duoc huy."
+        $logData | Export-Csv -Path "C:\Users\PC\Documents\GitHub\sap_tools\scripts\scripts\log\enable_internalRelay.csv" -Append -NoTypeInformation
+
+        Write-Host "Internal Relay da duoc bat cho domain $domainName." -ForegroundColor Green
     }
 }
 
@@ -400,11 +353,14 @@ function Check-Message-Detail {
         }
     }
 }
+
+
 function Header-Messages-Trace {
     Write-Host "================ CHECK MESSAGE TRACE ================`n" -ForegroundColor Yellow
 }
-function Check-Message-Trace {
 
+# Check messageTrace
+function Check-Message-Trace {
     Clear-Host
     Header-Messages-Trace
     # Nhập ngày bắt đầu và ngày kết thúc
@@ -541,6 +497,8 @@ function Check-Message-Trace {
     }
     
 }
+
+# Ham check va giai phong quarantine
 function Check-Relase-Quarantine {
     Clear-Host
     Write-Host "Ban da chon :`n================ CHECK MESSAGES QUARANTINE ================`n" -ForegroundColor Yellow
@@ -628,6 +586,63 @@ function Check-Relase-Quarantine {
 
 }
 
+# Xoa domain khoi 365
+function remove-Domain {
+    Clear-Host
+    do {
+        Write-Host "=================== REMOVE DOMAIN FROM 365 =====================" -ForegroundColor Yellow
+    
+        $domainName = Read-Host "`nNhap domain can xoa "
+    
+        # Lấy thông tin tên miền và hiển thị kết quả
+        try {
+            $domainInfo = Get-MsolDomain -DomainName $domainName -ErrorAction Stop | Select-Object Name, Status
+            Write-Host "`nThong tin ve ten mien $domainName" -ForegroundColor Cyan
+            $domainInfo
+            $domainExists = $true
+        }
+        catch {
+            Clear-Host
+            Write-Host "`nDomain $domainName khong ton tai trong Office 365." -ForegroundColor Yellow
+            $continue = Read-Host "`nBan co muon tiep tuc? (Y/N)"
+            if ($continue -eq 'Y') {
+                $domainExists = $false
+            }
+            else {
+                return
+            }
+        }
+    } while (!$domainExists)
+    
+    $confirmation = Read-Host "`nBan co chac chan muon xoa ten mien nay khoi 365 khong ? (Y/N)"
+    $reasonTicket = Read-Host -Prompt 'Nhap li do'
+    if ($confirmation -eq 'Y') {
+        Write-Host "Lenh se duoc thuc thi trong vong 5 giay" -ForegroundColor Red
+        Start-Sleep -Seconds 5
+    
+        # Xóa tên miền
+        try {
+            Remove-MsolDomain -DomainName $domainName -Force -ErrorAction Stop
+            Write-Host "`nTen mien $domainName da duoc xoa." -ForegroundColor Yellow
+            $logData = [PSCustomObject]@{
+                Domain = $domainName
+                Date   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                Server = $newEmail
+                Reason = $reasonTicket
+            }
+            $logData | Export-Csv -Path "C:\Users\PC\Documents\GitHub\sap_tools\scripts\scripts\log\remove_Domain.csv" -Append -NoTypeInformation
+        }
+        catch {
+            Write-Host "`nTen mien $domainName chua duoc xoa. Vui long kiem tra Name,Alias dang su dung ten" -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Host "Lenh xoa ten mien da duoc huy."
+    }
+}
+
+
+
 $folderDate = Get-Date -Format "MM.dd.yyyy"
 $folderPath = "./LOG_HERE/log_$folderDate"
 if (!(Test-Path -Path $folderPath)) {
@@ -652,8 +667,8 @@ try {
     }
     else {
         $email = "admin@proXXx01.onmicrosoft.com"
-        $newEmail = $email.Replace('XX', $serverNumber)
         $password = Read-Host -Prompt 'Nhap mat khau'
+        $newEmail = $email.Replace('XX', $serverNumber)
         Write-Host $newEmail
         $credential = New-Object System.Management.Automation.PSCredential -ArgumentList @($newEmail, (ConvertTo-SecureString -String $password -AsPlainText -Force))
     }
