@@ -481,7 +481,6 @@ function Enable-InternalRelay {
 
     # Hiển thị danh sách tên miền trong GridView và cho phép chọn nhiều tên miền
     $selectedDomains = $nonAuthoritativeDomains | Out-GridView -Title "Chon domain" -OutputMode Multiple
-    Write-Host "Dang load danh sach..."
     if ($selectedDomains -eq $null) {
         Write-Host "Ban da huy chon ten mien." -ForegroundColor Yellow
         return
